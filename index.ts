@@ -64,9 +64,8 @@ if (existsSync(TEXT_USERS_FOLDER)) {
         console.log(`Loading ${name}...`);
         const p = convertToSQL(resolve(TEXT_USERS_FOLDER, file), (arr) => DatabaseInteractions.insertPlayers(db, arr.map(v =>
         {
-            const [_, slotIndex, playerId, data] = v;
+            const [playerId, data] = v;
             return {
-                slotIndex: Number(slotIndex!),
                 playerId: playerId!,
                 data: data!
             };
@@ -105,3 +104,8 @@ else {
 
 // http server
 HttpHandler.init(db, "overengineered", 1367);
+
+export const getAllSaves = (db: Database) =>
+{
+    return db.query("SELECT * FROM players").all();
+};

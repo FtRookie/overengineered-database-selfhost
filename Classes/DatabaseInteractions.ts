@@ -24,7 +24,6 @@ export namespace DatabaseInteractions
 
     export const insertPlayers = (db: Database,
         playerData: {
-            slotIndex: number,
             playerId: string,
             data: string,
         }[]
