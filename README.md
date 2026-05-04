@@ -22,7 +22,11 @@ bun run index.ts
 Some data has been included in the example files to test processing,
 Once you run index.ts, you can try accessing the data
 
-Saves
+PlayerData:
+> 238427763, 894261194, 3162050105, 2880942160, 1745850275, 5243461283, 148819022
+
+SaveData:
+> playerID: 238427763, indices: 30, 31, 34, 35
 
 ### Endpoints
 
