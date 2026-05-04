@@ -73,13 +73,11 @@ To request a specific save index for player ID "238427763" you'd need to use GET
 The result will be:
 ```json
 {
-    {
-        "increment":31,
-        "player_id":"238427763",
-        "index":"30",
-        "data":"..."
+    "increment":31,
+    "player_id":"238427763",
+    "index":"30",
+    "data":"..."
     }
-}
 ```
 
 If there are duplicates then the first from the list will be taken.
