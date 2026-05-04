@@ -22,7 +22,11 @@ bun run index.ts
 Some data has been included in the example files to test processing,
 Once you run index.ts, you can try accessing the data
 
-Saves
+PlayerData:
+> 238427763, 894261194, 3162050105, 2880942160, 1745850275, 5243461283, 148819022
+
+SaveData:
+> playerID: 238427763, indices: 30, 31, 34, 35
 
 ### Endpoints
 
@@ -30,7 +34,7 @@ Saves
 | --- | --- | --- | --- |
 | GET | /overengineered/player/:id | Get player data entry by ID | id (player ID) |
 | GET | /overengineered/save/:id | Get all saves for a player | id (player ID) |
-| GET | /overengineered/save/:id/:index | Get the save at the given index for a player | {id (player ID)}  |
+| GET | /overengineered/save/:id/:index | Get the save at the given index for a player | id (player ID), index (slot ID)  |
 | POST | /overengineered/player | Insert or update player entry | { slotIndex: number, playerId: string, data: string, token: string } |
 | POST | /overengineered/save | Insert or update a save entry | { playerId: string, data: string, token: string } |
 
