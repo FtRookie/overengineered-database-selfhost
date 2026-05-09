@@ -35,6 +35,7 @@ SaveData:
 | GET | /overengineered/player/:id | Get player data entry by ID | id (player ID) |
 | GET | /overengineered/save/:id | Get all saves for a player | id (player ID) |
 | GET | /overengineered/save/:id/:index | Get the save at the given index for a player | id (player ID), index (slot ID)  |
+| GET | /overengineered/save/:id/:index/:page | Get a segment page of the save at the given index for a player | id (player ID), index (slot ID), page (page index; starts from 0)  |
 | POST | /overengineered/player | Insert or update player entry | { slotIndex: number, playerId: string, data: string, token: string } |
 | POST | /overengineered/save | Insert or update a save entry | { playerId: string, data: string, token: string } |
 

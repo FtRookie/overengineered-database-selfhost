@@ -64,12 +64,11 @@ const updateSaveCache = (db: Database, id: playerID, index: slotIndex) =>
 {
     let cachedSave = findCachedSaveData(id, index);
     if (!cachedSave) {
-        //todo: test it with http://localhost:1367/overengineered/save/238427763/1
-        const gotSave: SaveResult = DatabaseInteractions.getSavesOfPlayerByIDWithIndex(db, id, index); // <---- culprit
+        const gotSave: SaveResult = DatabaseInteractions.getSavesOfPlayerByIDWithIndex(db, id, index);
         const saveStr = JSON.stringify(gotSave);
         cachedSave = {
             data: saveStr,
-            slicedData: splitUtf8(saveStr)
+            slicedData: splitUtf8(saveStr, 1_000_000)
         };
         cachedSaveData.get(id)!.set(index, cachedSave);
 
@@ -114,10 +113,13 @@ export namespace HttpHandler
         app.get(`/${base}/save/:id/:index/:page`, ({ params: { id, index, page } }) =>
         {
             const pg = Number(page);
-            if (isNaN(pg)) return { error: 'Not found' };
+            if (isNaN(pg)) return { error: 'No page found' };
 
             const save = updateSaveCache(db, id, index);
-            return save.slicedData[pg] ?? { error: 'Not found' };
+            const indexOutOfBounds = pg > save.slicedData.length - 1;
+            return indexOutOfBounds ?
+                { error: 'Page out of index' } :
+                save.slicedData[pg] ?? { error: 'Not found' };
         });
 
         // write player
@@ -139,6 +141,18 @@ export namespace HttpHandler
         {
             if (body.token !== write_token) return { error: "incorrect token" };
             DatabaseInteractions.insertSave(db, [body]);
+
+            const saveForCache = {
+                data: body.data,
+                slicedData: splitUtf8(body.data, 1_000_000)
+            };
+            cachedSaveData.get(body.playerID)?.set(body.index, saveForCache);
+            // remove that from the cache after 30 mins
+            setTimeout(
+                () => cachedSaveData.get(body.playerID)?.delete(body.index),
+                30 * 60 * 1_000
+            );
+
             return { status: 'ok' };
         }, {
             body: t.Object({
