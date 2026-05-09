@@ -1,5 +1,5 @@
 import { Elysia, t } from 'elysia';
-import { DatabaseInteractions, type SaveResult } from './DatabaseInteractions';
+import { DatabaseInteractions, type DataResult, type SaveResult } from './DatabaseInteractions';
 import { Database } from "bun:sqlite";
 import { write_token } from '../Access Tokens/securityTokens';
 
@@ -36,6 +36,8 @@ function splitUtf8(str: string, maxBytes = 4096)
 
 type playerID = string;
 type slotIndex = string;
+type errType = "OUT_OF_INDEX" | "NOT_FOUND" | "INCORRECT_TOKEN";
+type errcode = { error: string, err_type: errType } | { status: string };
 
 const cachedSaveData = new Map<
     playerID,
@@ -89,43 +91,43 @@ export namespace HttpHandler
         app.listen(port);
 
         // read player data by id
-        app.get(`/${base}/player/:id`, ({ params: { id } }) =>
+        app.get(`/${base}/player/:id`, ({ params: { id } }): errcode | DataResult =>
         {
             const player = DatabaseInteractions.getDataEntryByID(db, id);
-            return player ?? { error: 'Not found' };
+            return player ?? { error: 'Not found', err_type: "NOT_FOUND" };
         });
 
         // read all saves by player id
-        app.get(`/${base}/save/:id`, ({ params: { id } }) =>
+        app.get(`/${base}/save/:id`, ({ params: { id } }): errcode | { saves: SaveResult[] } =>
         {
             const saves = DatabaseInteractions.getSavesOfPlayerByID(db, id);
-            return saves ? ({ saves }) : { error: 'Not found' };
+            return saves ? ({ saves }) : { error: 'Not found', err_type: "NOT_FOUND" };
         });
 
         // read single save by player id
-        app.get(`/${base}/save/:id/:index`, ({ params: { id, index } }) =>
+        app.get(`/${base}/save/:id/:index`, ({ params: { id, index } }): errcode | string =>
         {
             const save = updateSaveCache(db, id, index);
-            return save.data ?? { error: 'Not found' };
+            return save.data ?? { error: 'Not found', err_type: "NOT_FOUND" };
         });
 
         // read single save by player id by page 
-        app.get(`/${base}/save/:id/:index/:page`, ({ params: { id, index, page } }) =>
+        app.get(`/${base}/save/:id/:index/:page`, ({ params: { id, index, page } }): errcode | string =>
         {
             const pg = Number(page);
-            if (isNaN(pg)) return { error: 'No page found' };
+            if (isNaN(pg)) return { error: 'No page found', err_type: "NOT_FOUND" };
 
             const save = updateSaveCache(db, id, index);
             const indexOutOfBounds = pg > save.slicedData.length - 1;
             return indexOutOfBounds ?
-                { error: 'Page out of index' } :
-                save.slicedData[pg] ?? { error: 'Not found' };
+                { error: 'Page out of index', err_type: "OUT_OF_INDEX" } :
+                save.slicedData[pg] ?? { error: 'Not found', err_type: "NOT_FOUND" };
         });
 
         // write player
-        app.post(`/${base}/player`, ({ body }) =>
+        app.post(`/${base}/player`, ({ body }): errcode =>
         {
-            if (body.token !== write_token) return { error: "incorrect token" };
+            if (body.token !== write_token) return { error: "Incorrect token", err_type: "INCORRECT_TOKEN" };
             DatabaseInteractions.insertPlayers(db, [body]);
             return { status: 'ok' };
         }, {
@@ -137,9 +139,9 @@ export namespace HttpHandler
         });
 
         // write save (I'm not doing batches)
-        app.post(`/${base}/save`, ({ body }) =>
+        app.post(`/${base}/save`, ({ body }): errcode =>
         {
-            if (body.token !== write_token) return { error: "incorrect token" };
+            if (body.token !== write_token) return { error: "Incorrect token", err_type: "INCORRECT_TOKEN" };
             DatabaseInteractions.insertSave(db, [body]);
 
             const saveForCache = {
