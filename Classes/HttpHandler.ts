@@ -5,8 +5,7 @@ import { write_token } from '../Access Tokens/securityTokens';
 
 
 // AI slop here :)
-function splitUtf8(str: string, maxBytes = 4096)
-{
+function splitUtf8(str: string, maxBytes = 4096) {
     const buffer = Buffer.from(str, 'utf8');
     const chunks = [];
     let offset = 0;
@@ -48,8 +47,7 @@ const cachedSaveData = new Map<
     >
 >();
 
-const findCachedSaveData = (id: playerID, index: slotIndex) =>
-{
+const findCachedSaveData = (id: playerID, index: slotIndex) => {
     const playerCached = cachedSaveData.get(id);
     if (!playerCached) {
         cachedSaveData.set(id, new Map());
@@ -60,16 +58,14 @@ const findCachedSaveData = (id: playerID, index: slotIndex) =>
 };
 
 
-const updateSaveCache = (db: Database, id: playerID, index: slotIndex) =>
-{
+const updateSaveCache = (db: Database, id: playerID, index: slotIndex) => {
     let cachedSave = findCachedSaveData(id, index);
     if (!cachedSave) {
-        //todo: test it with http://localhost:1367/overengineered/save/238427763/1
-        const gotSave: SaveResult = DatabaseInteractions.getSavesOfPlayerByIDWithIndex(db, id, index); // <---- culprit
+        const gotSave: SaveResult = DatabaseInteractions.getSavesOfPlayerByIDWithIndex(db, id, index);
         const saveStr = JSON.stringify(gotSave);
         cachedSave = {
             data: saveStr,
-            slicedData: splitUtf8(saveStr)
+            slicedData: splitUtf8(saveStr, 1_000_000)
         };
         cachedSaveData.get(id)!.set(index, cachedSave);
 
@@ -82,47 +78,43 @@ const updateSaveCache = (db: Database, id: playerID, index: slotIndex) =>
     return cachedSave;
 }
 
-export namespace HttpHandler
-{
-    export const init = (db: Database, base: string, port: number) =>
-    {
+export namespace HttpHandler {
+    export const init = (db: Database, base: string, port: number) => {
         const app = new Elysia();
         app.listen(port);
 
         // read player data by id
-        app.get(`/${base}/player/:id`, ({ params: { id } }) =>
-        {
+        app.get(`/${base}/player/:id`, ({ params: { id } }) => {
             const player = DatabaseInteractions.getDataEntryByID(db, id);
             return player ?? { error: 'Not found' };
         });
 
         // read all saves by player id
-        app.get(`/${base}/save/:id`, ({ params: { id } }) =>
-        {
+        app.get(`/${base}/save/:id`, ({ params: { id } }) => {
             const saves = DatabaseInteractions.getSavesOfPlayerByID(db, id);
             return saves ? ({ saves }) : { error: 'Not found' };
         });
 
         // read single save by player id
-        app.get(`/${base}/save/:id/:index`, ({ params: { id, index } }) =>
-        {
+        app.get(`/${base}/save/:id/:index`, ({ params: { id, index } }) => {
             const save = updateSaveCache(db, id, index);
             return save.data ?? { error: 'Not found' };
         });
 
         // read single save by player id by page 
-        app.get(`/${base}/save/:id/:index/:page`, ({ params: { id, index, page } }) =>
-        {
+        app.get(`/${base}/save/:id/:index/:page`, ({ params: { id, index, page } }) => {
             const pg = Number(page);
-            if (isNaN(pg)) return { error: 'Not found' };
+            if (isNaN(pg)) return { error: 'No page found' };
 
             const save = updateSaveCache(db, id, index);
-            return save.slicedData[pg] ?? { error: 'Not found' };
+            const indexOutOfBounds = pg > save.slicedData.length - 1;
+            return indexOutOfBounds ?
+                null :
+                save.slicedData[pg] ?? { error: 'Not found' };
         });
 
         // write player
-        app.post(`/${base}/player`, ({ body }) =>
-        {
+        app.post(`/${base}/player`, ({ body }) => {
             if (body.token !== write_token) return { error: "incorrect token" };
             DatabaseInteractions.insertPlayers(db, [body]);
             return { status: 'ok' };
@@ -135,8 +127,7 @@ export namespace HttpHandler
         });
 
         // write save (I'm not doing batches)
-        app.post(`/${base}/save`, ({ body }) =>
-        {
+        app.post(`/${base}/save`, ({ body }) => {
             if (body.token !== write_token) return { error: "incorrect token" };
             DatabaseInteractions.insertSave(db, [body]);
             return { status: 'ok' };
