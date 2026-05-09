@@ -109,7 +109,7 @@ export namespace HttpHandler {
             const save = updateSaveCache(db, id, index);
             const indexOutOfBounds = pg > save.slicedData.length - 1;
             return indexOutOfBounds ?
-                null :
+                { error: 'Page out of index' } :
                 save.slicedData[pg] ?? { error: 'Not found' };
         });
 
