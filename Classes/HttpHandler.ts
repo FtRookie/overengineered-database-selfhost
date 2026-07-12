@@ -50,49 +50,91 @@ function splitUtf8(str: string, maxBytes = 4096)
     return chunks;
 }
 
-const findCachedSaveData = (id: PlayerID, index: SlotIndex) =>
+// Roblox caps a response it can read, so a save is handed out in pages this size.
+const PAGE_BYTES = 1_000_000;
+const CACHE_TTL_MS = 30 * 60 * 1_000;
+
+/**
+ * Writes INVALIDATE the cache; they never rebuild it.
+ *
+ * They used to. The read path cached JSON.stringify(row) — the whole row, blob nested under .data — and the
+ * write path cached JSON.stringify(body.data), just the blob. Same key, two different shapes, decided by
+ * whichever happened to run first. Dropping the entry is simpler and is the only version that cannot drift.
+ */
+const dropCachedSave = (id: PlayerID, index: SlotIndex) =>
 {
-    const playerCached = cachedSaveData.get(id);
-    if (!playerCached) {
-        cachedSaveData.set(id, new Map());
-        return;
-    }
+    const forPlayer = cachedSaveData.get(id);
+    const cached = forPlayer?.get(index);
+    if (!cached) return;
 
-    return playerCached.get(index);
+    clearTimeout(cached.timeout);
+    forPlayer!.delete(index);
 };
-
-
-// for test only
-const DISABLE_CACHE = true;
 
 const updateSaveCache = (db: Database, id: PlayerID, index: SlotIndex): PreparedCachedSaveData | undefined =>
 {
-    if (DISABLE_CACHE) {
-        const gotSave = DatabaseInteractions.getSavesOfPlayerByIDWithIndex(db, id, index);
-        if (!gotSave) return;
-        return { data: gotSave.data, slicedData: splitUtf8(JSON.stringify(gotSave), 1_000_000) };
+    let forPlayer = cachedSaveData.get(id);
+    if (!forPlayer) {
+        forPlayer = new Map();
+        cachedSaveData.set(id, forPlayer);
     }
 
-    let cachedSave = findCachedSaveData(id, index);
-    if (!cachedSave) {
-        const gotSave = DatabaseInteractions.getSavesOfPlayerByIDWithIndex(db, id, index);
-        if (!gotSave) return; // return nothing because nothing to update in the cache
+    let cached = forPlayer.get(index);
+    if (!cached) {
+        const row = DatabaseInteractions.getSavesOfPlayerByIDWithIndex(db, id, index);
+        if (!row) return; // nothing to cache
 
-        cachedSave = {
-            data: gotSave.data,
-            slicedData: splitUtf8(JSON.stringify(gotSave), 1_000_000),
-        };
-        cachedSaveData.get(id)!.set(index, cachedSave);
+        cached = { data: row.data, slicedData: splitUtf8(JSON.stringify(row), PAGE_BYTES) };
+        forPlayer.set(index, cached);
     }
 
-    clearTimeout(cachedSave.timeout);
-    cachedSave.timeout = setTimeout(
-        () => cachedSaveData.get(id)?.delete(index),
-        30 * 60 * 1_000
-    );
+    clearTimeout(cached.timeout);
+    cached.timeout = setTimeout(() => dropCachedSave(id, index), CACHE_TTL_MS);
 
-    return cachedSave;
+    return cached;
 }
+
+/**
+ * Chunked uploads.
+ *
+ * Roblox caps an outgoing request body at roughly 1MB, so a large build cannot be written in one POST — no
+ * amount of proxy configuration changes that, the engine simply will not send it. It arrives in pieces
+ * instead, and is committed only once every piece is here.
+ *
+ * A partial upload never touches the saves table. An interrupted save therefore leaves the player's existing
+ * slot exactly as it was, which is the whole point: half a build written over a good one is worse than no
+ * save at all.
+ */
+type UploadID = string;
+type PendingUpload = {
+    playerID: PlayerID,
+    index: SlotIndex,
+    parts: (string | undefined)[],
+    received: number,
+    bytes: number,
+    timeout: ReturnType<typeof setTimeout>
+};
+
+const pendingUploads = new Map<UploadID, PendingUpload>();
+
+const UPLOAD_TTL_MS = 5 * 60 * 1_000;
+const MAX_UPLOAD_PARTS = 64;
+const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
+
+const dropUpload = (uploadID: UploadID) =>
+{
+    const upload = pendingUploads.get(uploadID);
+    if (!upload) return;
+
+    clearTimeout(upload.timeout);
+    pendingUploads.delete(uploadID);
+};
+
+const touchUpload = (uploadID: UploadID, upload: PendingUpload) =>
+{
+    clearTimeout(upload.timeout);
+    upload.timeout = setTimeout(() => dropUpload(uploadID), UPLOAD_TTL_MS);
+};
 
 export namespace HttpHandler
 {
@@ -189,31 +231,94 @@ export namespace HttpHandler
             const insertResult = DatabaseInteractions.insertSave(db, [body]);
             if (insertResult === "FAIL") return { error: "Error while upserting save data", err_type: "INSERT_FAIL" };
 
-            // clear cache
-            const oldSave = cachedSaveData.get(body.playerID)?.get(body.index);
-            clearTimeout(oldSave?.timeout);
-
-            // make new thing
-            const saveForCache: PreparedCachedSaveData = {
-                data: body.data,
-                slicedData: splitUtf8(JSON.stringify(body.data), 1_000_000),
-
-                // remove that from the cache after 30 mins
-                timeout: setTimeout(
-                    () => cachedSaveData.get(body.playerID)?.delete(body.index),
-                    30 * 60 * 1_000
-                )
-            };
-
-            cachedSaveData.get(body.playerID)?.set(body.index, saveForCache);
-
-
+            dropCachedSave(body.playerID, body.index);
             return { status: 'ok' };
         }, {
             body: t.Object({
                 playerID: t.String(),
                 index: t.String(),
                 data: t.Record(t.String(), t.Any()),
+                token: t.String(),
+            })
+        });
+
+        // write save in pieces, for builds Roblox cannot send in one request. See pendingUploads.
+        app.post(`/${base}/save/chunk`, ({ body }): ErrorCode =>
+        {
+            if (isUsingPlaceholderWriteToken) return { error: "Using placeholder token", err_type: "INCORRECT_TOKEN" };
+            if (body.token !== WRITE_TOKEN) return { error: "Incorrect token", err_type: "INCORRECT_TOKEN" };
+
+            if (body.parts < 1 || body.parts > MAX_UPLOAD_PARTS) return { error: `parts must be 1..${MAX_UPLOAD_PARTS}`, err_type: "INSERT_FAIL" };
+            if (body.part < 0 || body.part >= body.parts) return { error: "part is out of range", err_type: "INSERT_FAIL" };
+
+            let upload = pendingUploads.get(body.uploadID);
+            if (!upload) {
+                upload = {
+                    playerID: body.playerID,
+                    index: body.index,
+                    parts: new Array(body.parts).fill(undefined),
+                    received: 0,
+                    bytes: 0,
+                    timeout: setTimeout(() => dropUpload(body.uploadID), UPLOAD_TTL_MS)
+                };
+                pendingUploads.set(body.uploadID, upload);
+            }
+
+            // One upload id belongs to one slot. Without this, a second caller reusing the id could graft its
+            // chunks onto somebody else's build and commit the result over their save.
+            if (upload.playerID !== body.playerID || upload.index !== body.index || upload.parts.length !== body.parts) {
+                dropUpload(body.uploadID);
+                return { error: "Upload id does not match this slot", err_type: "INSERT_FAIL" };
+            }
+
+            const existing = upload.parts[body.part];
+            if (existing === undefined) upload.received++;
+            else upload.bytes -= Buffer.byteLength(existing, 'utf8');
+
+            upload.parts[body.part] = body.data;
+            upload.bytes += Buffer.byteLength(body.data, 'utf8');
+
+            if (upload.bytes > MAX_UPLOAD_BYTES) {
+                dropUpload(body.uploadID);
+                return { error: "Upload is too large", err_type: "INSERT_FAIL" };
+            }
+
+            if (upload.received < body.parts) {
+                touchUpload(body.uploadID, upload);
+                return { status: 'pending' };
+            }
+
+            // Parse BEFORE writing. A truncated or mangled upload must fail loudly, not overwrite a good slot
+            // with junk that only fails to load months later.
+            let data: unknown;
+            try {
+                data = JSON.parse(upload.parts.join(""));
+            } catch {
+                dropUpload(body.uploadID);
+                return { error: "Assembled upload is not valid JSON", err_type: "INSERT_FAIL" };
+            }
+
+            dropUpload(body.uploadID);
+
+            if (!data || typeof data !== 'object' || !Object.keys(data).length) {
+                return { error: "Incorrect body data type", err_type: "INSERT_FAIL" };
+            }
+
+            const assembled = { playerID: body.playerID, index: body.index, data } as ParsedSlotFormatWithIndex;
+            if (DatabaseInteractions.insertSave(db, [assembled]) === "FAIL") {
+                return { error: "Error while upserting save data", err_type: "INSERT_FAIL" };
+            }
+
+            dropCachedSave(body.playerID, body.index);
+            return { status: 'ok' };
+        }, {
+            body: t.Object({
+                playerID: t.String(),
+                index: t.String(),
+                uploadID: t.String(),
+                part: t.Number(),
+                parts: t.Number(),
+                data: t.String(),
                 token: t.String(),
             })
         });
@@ -236,10 +341,17 @@ export namespace HttpHandler
 
             logMigration({ migratedPlayer, migratedSave })
 
-            return {
+            const result = {
                 metadata: DatabaseInteractions.insertPlayers(db, [migratedPlayer]),
                 saves: DatabaseInteractions.insertSave(db, migratedSave)
             };
+
+            // The destination's slots just changed underneath their cache. Without this, whatever was read
+            // before the migration keeps being served for the next 30 minutes — the migration would look like
+            // it silently did nothing.
+            for (const save of migratedSave) dropCachedSave(body.toID, save.index);
+
+            return result;
         }, {
             body: t.Object({
                 fromID: t.String(),
