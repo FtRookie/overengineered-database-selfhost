@@ -86,6 +86,15 @@ export namespace DatabaseInteractions {
         return { ...res, data: JSON.parse(res.data) }
     };
 
+    /** Unparsed row — the only way to read one whose data will not parse. */
+    export const getRawPlayerDataEntryByID = (db: Database, playerID: string) => {
+        return db.query(`
+            SELECT * FROM players
+            WHERE playerID = ?
+            LIMIT 1
+        `).get(playerID) as SavedPlayerDatabaseFormat | null ?? undefined;
+    };
+
 
     // SLOT DATA:
     //  INCREMENT \t INDEX \t USERID \t { "blocks": [ ... ], "version": ## }

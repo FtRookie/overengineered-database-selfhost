@@ -4,7 +4,7 @@ import { ADMIN_TOKEN, isUsingPlaceholderAdminToken, isUsingPlaceholderWriteToken
 import { GameEventsHandler } from './GameEventsHandler';
 import { DatabaseInteractions, type SavedPlayerFormat, type ParsedSlotFormatWithIndex, type ParsedSlotFormat } from './DatabaseInteractions';
 
-export type ErrorType = "OUT_OF_INDEX" | "NOT_FOUND" | "INCORRECT_TOKEN" | "INSERT_FAIL";
+export type ErrorType = "OUT_OF_INDEX" | "NOT_FOUND" | "INCORRECT_TOKEN" | "INSERT_FAIL" | "CORRUPT_ROW";
 type ErrorCode = { error: string, err_type: ErrorType } | { status: string };
 type MigrationResult = { error: string, err_type: ErrorType } | { metadata: string, saves: string }
 
@@ -136,6 +136,27 @@ const touchUpload = (uploadID: UploadID, upload: PendingUpload) =>
     upload.timeout = setTimeout(() => dropUpload(uploadID), UPLOAD_TTL_MS);
 };
 
+/** Offset of the first string token not followed by ':' ',' '}' ']'. Token walk, not regex — a regex matches inside string contents. */
+const findBrokenSeparator = (text: string): number | undefined =>
+{
+    let i = 0;
+    while (i < text.length) {
+        if (text[i] !== '"') { i++; continue; }
+
+        let end = i + 1;
+        while (end < text.length && text[end] !== '"') end += text[end] === "\\" ? 2 : 1;
+        if (end >= text.length) return i; // unterminated string
+
+        let after = end + 1;
+        while (after < text.length && /\s/.test(text[after]!)) after++;
+
+        const next = text[after];
+        if (next !== undefined && next !== ":" && next !== "," && next !== "}" && next !== "]") return i;
+        i = end + 1;
+    }
+    return undefined;
+};
+
 export namespace HttpHandler
 {
     export const init = (db: Database, base: string, port: number) =>
@@ -144,10 +165,64 @@ export namespace HttpHandler
         app.listen(port);
 
         // read player data by id
-        app.get(`/${base}/player/:id`, ({ params: { id } }): ErrorCode | SavedPlayerFormat =>
+        app.get(`/${base}/player/:id`, ({ params: { id }, set }): ErrorCode | SavedPlayerFormat =>
         {
-            const player = DatabaseInteractions.getPlayerDataEntryByID(db, id);
-            return player ?? { error: 'Not found', err_type: "NOT_FOUND" };
+            // Must stay non-200: the game reads a 200-with-error as "no row yet" and would overwrite the player.
+            try {
+                const player = DatabaseInteractions.getPlayerDataEntryByID(db, id);
+                return player ?? { error: 'Not found', err_type: "NOT_FOUND" };
+            } catch (err) {
+                set.status = 500;
+                return { error: `Stored data for player ${id} is not valid JSON: ${err}`, err_type: "CORRUPT_ROW" };
+            }
+        });
+
+        // raw row, for one the parser rejects
+        app.get(`/${base}/player/:id/raw`, ({ params: { id } }) =>
+        {
+            const row = DatabaseInteractions.getRawPlayerDataEntryByID(db, id);
+            if (!row) return { error: 'Not found', err_type: "NOT_FOUND" };
+
+            const data = row.data ?? "";
+            let parseError: string | undefined;
+            try { JSON.parse(data); } catch (err) { parseError = String(err); }
+
+            const suspectAt = findBrokenSeparator(data);
+
+            return {
+                playerID: row.playerID,
+                length: data.length,
+                parseError,
+                suspectAt,
+                suspect: suspectAt === undefined ? undefined : data.slice(Math.max(0, suspectAt - 120), suspectAt + 120),
+                data,
+            };
+        });
+
+        // hand repair of a rejected row
+        app.post(`/${base}/player/raw`, ({ body }): ErrorCode =>
+        {
+            if (isUsingPlaceholderAdminToken) return { error: "Using placeholder token", err_type: "INCORRECT_TOKEN" };
+            if (body.token !== ADMIN_TOKEN) return { error: "Incorrect token", err_type: "INCORRECT_TOKEN" };
+
+            // Parse first: a repair must not leave the row worse.
+            let parsed: unknown;
+            try { parsed = JSON.parse(body.data); } catch (err) {
+                return { error: `Refused, the replacement is not valid JSON: ${err}`, err_type: "INSERT_FAIL" };
+            }
+            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+                return { error: "Refused, the replacement is not a JSON object", err_type: "INSERT_FAIL" };
+            }
+
+            return DatabaseInteractions.insertPlayers(db, [{ playerID: body.playerID, data: parsed as SavedPlayerFormat["data"] }]) === "SUCCESS"
+                ? { status: 'ok' }
+                : { error: "Error while upserting player metadata", err_type: "INSERT_FAIL" };
+        }, {
+            body: t.Object({
+                playerID: t.String(),
+                data: t.String(),
+                token: t.String(),
+            })
         });
 
         // read all saves by player id
