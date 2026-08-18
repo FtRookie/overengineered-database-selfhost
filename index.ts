@@ -4,6 +4,7 @@ import { Database } from "bun:sqlite";
 import { HttpHandler } from "./Classes/HttpHandler";
 import { basename, extname, resolve } from "node:path";
 import { rename } from "node:fs/promises";
+import { LegacyJson } from "./Classes/LegacyJson";
 import { TokenHandler } from "./Classes/TokenHandler";
 import { DatabaseInteractions, type ParsedSlotFormat, type ParsedSlotFormatWithIndex, type SavedPlayerFormat, type UnparsedCommonData, type UnparsedCommonDataWithIndex } from "./Classes/DatabaseInteractions";
 
@@ -15,16 +16,18 @@ const [ADMIN_TOKEN, isUsingPlaceholderAdminToken] = await TokenHandler.getOrGene
 export { WRITE_TOKEN, isUsingPlaceholderWriteToken };
 export { ADMIN_TOKEN, isUsingPlaceholderAdminToken };
 
-// i3ym
-const unslash = (str: string) => str.replaceAll("\\\\", "\\")
-
 function destringifyData(entry: UnparsedCommonData | undefined): SavedPlayerFormat | undefined;
 function destringifyData(entry: UnparsedCommonDataWithIndex | undefined): ParsedSlotFormatWithIndex | undefined;
 function destringifyData(entry: (UnparsedCommonData | UnparsedCommonDataWithIndex) | undefined): any
 {
     if (!entry) return undefined;
-    let data = entry.data;
-    while (typeof data === "string") data = JSON.parse(data);
+
+    const data = LegacyJson.peel(entry.data);
+    if (data === LegacyJson.FAILED) {
+        console.warn("Skipped a row that could not be parsed:", JSON.stringify(entry).slice(0, 120));
+        return undefined;
+    }
+
     return { ...entry, data };
 }
 
@@ -36,6 +39,9 @@ const convertToSQL = async (filepath: string, callback: (line: string[][]) => vo
     console.log("filepath:", filepath);
 
     const filename = basename(filepath);
+    // the legacy dump is uniformly double-escaped and must be unslashed; migrations.txt is written by this app
+    // from live data and is already correct, so unslashing it would corrupt good saves
+    const unslashLines = LegacyJson.needsUnslashing(filename);
     const fileStream = createReadStream(filepath);
     const lines = createInterface({
         input: fileStream,
@@ -46,7 +52,7 @@ const convertToSQL = async (filepath: string, callback: (line: string[][]) => vo
     const BATCH_SIZE = 5_000;
     let batch: string[][] = [];
     for await (const line of lines) {
-        batch.push(unslash(line).split("\t"));
+        batch.push((unslashLines ? LegacyJson.unslash(line) : line).split("\t"));
         if (batch.length >= BATCH_SIZE) {
             callback(batch);
             batch = [];
