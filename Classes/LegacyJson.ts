@@ -19,8 +19,17 @@ export namespace LegacyJson {
      * read from, and the README tells operators to drop the `.processed` suffix to re-import a file. Unslashing
      * that one would corrupt good saves, so it is excluded by name.
      */
-    export const MIGRATIONS_FILE = "migrations.txt";
-    export const needsUnslashing = (filename: string) => filename !== MIGRATIONS_FILE;
+    export const MIGRATIONS_PREFIX = "migrations";
+
+    /**
+     * Matched loosely — case-insensitively, by prefix — because the two ways of being wrong are not equally
+     * bad. Wrongly protecting a legacy dump leaves it doubled, so it fails to parse and is skipped with a
+     * warning: loud, and recoverable by renaming the file. Wrongly unslashing a live row rewrites player
+     * content into something that still parses and still loads: silent, and unrecoverable. So anything that
+     * looks like a migrations file is left alone.
+     */
+    export const needsUnslashing = (filename: string) =>
+        !filename.toLowerCase().startsWith(MIGRATIONS_PREFIX);
 
     export const FAILED = Symbol("unparseable");
 

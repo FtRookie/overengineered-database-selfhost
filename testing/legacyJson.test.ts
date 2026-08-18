@@ -5,9 +5,15 @@ const { peel, unslash, needsUnslashing, FAILED, MAX_PEELS } = LegacyJson;
 
 // --- provenance, which is the only sound signal ---
 
-test("the legacy dump is unslashed, migrations.txt is not", () => {
+test("the legacy dump is unslashed, migrations files are not", () => {
     expect(needsUnslashing("saves_2019_part1.txt")).toBe(true);
-    expect(needsUnslashing("migrations.txt")).toBe(false);
+    expect(needsUnslashing("playerdata_example.txt")).toBe(true);
+
+    // matched loosely on purpose: a renamed or re-cased copy must not fall through to the corrupting branch
+    for (const name of ["migrations.txt", "Migrations.txt", "migrations_old.txt",
+                        "migrations (1).txt", "migrations.backup.txt"]) {
+        expect(needsUnslashing(name)).toBe(false);
+    }
 });
 
 test("why it cannot be decided by inspection: doubling often keeps the JSON valid", () => {
