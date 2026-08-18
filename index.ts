@@ -4,6 +4,7 @@ import { Database } from "bun:sqlite";
 import { HttpHandler } from "./Classes/HttpHandler";
 import { basename, extname, resolve } from "node:path";
 import { rename } from "node:fs/promises";
+import { CuratedImport } from "./Classes/CuratedImport";
 import { LegacyJson } from "./Classes/LegacyJson";
 import { TokenHandler } from "./Classes/TokenHandler";
 import { DatabaseInteractions, type ParsedSlotFormat, type ParsedSlotFormatWithIndex, type SavedPlayerFormat, type UnparsedCommonData, type UnparsedCommonDataWithIndex } from "./Classes/DatabaseInteractions";
@@ -33,6 +34,47 @@ function destringifyData(entry: (UnparsedCommonData | UnparsedCommonDataWithInde
 
 
 // could've done generic but I'm too lazy
+/**
+ * Reads a curated `.json` / `.jsonl` file — already-correct rows that must not be run through any repair.
+ * See {@link CuratedImport}. Returns false when the file is not of that kind, so the caller falls through to
+ * the legacy `.txt` path.
+ */
+const importCurated = async (filepath: string, rowsFrom: (parsed: unknown) => unknown[],
+                             insert: (rows: any[]) => void): Promise<boolean> =>
+{
+    const extension = extname(filepath);
+    if (!CuratedImport.isCurated(extension)) return false;
+
+    console.log("filepath:", filepath, "(curated, no repairs applied)");
+    const rows: unknown[] = [];
+
+    if (CuratedImport.isLineDelimited(extension)) {
+        // streamed, so a large file never has to be held whole
+        const lines = createInterface({ input: createReadStream(filepath), crlfDelay: Infinity });
+        let lineNumber = 0;
+        for await (const line of lines) {
+            lineNumber++;
+            if (line.trim().length === 0) continue;
+
+            try {
+                rows.push(...rowsFrom(JSON.parse(line)));
+            } catch (err) {
+                console.warn(`Skipped ${basename(filepath)} line ${lineNumber}: ${err}`);
+            }
+        }
+    } else {
+        try {
+            rows.push(...rowsFrom(JSON.parse(await Bun.file(filepath).text())));
+        } catch (err) {
+            console.warn(`Skipped ${basename(filepath)}: ${err}`);
+        }
+    }
+
+    if (rows.length) insert(rows);
+    await rename(filepath, filepath + ".processed");
+    return true;
+}
+
 const convertToSQL = async (filepath: string, callback: (line: string[][]) => void) =>
 {
     if (extname(filepath) !== ".txt") return;
@@ -88,8 +130,15 @@ if (existsSync(TEXT_PLAYERS_FOLDER)) {
         console.log(`Loading ${name}...`);
 
 
+        const path = resolve(TEXT_PLAYERS_FOLDER, file);
+        if (await importCurated(path, CuratedImport.playerRowsFrom,
+            (rows) => DatabaseInteractions.insertPlayers(db, rows))) {
+            console.log(`Finished loading ${name} in ${(Date.now() - start) / 1000}s.`);
+            continue;
+        }
+
         const p = convertToSQL(
-            resolve(TEXT_PLAYERS_FOLDER, file),
+            path,
             (batch) => DatabaseInteractions.insertPlayers(db, batch.map(v =>
             {
                 const [playerID, data] = v as [string, string,];
@@ -109,8 +158,15 @@ if (existsSync(TEXT_SAVES_FOLDER)) {
         const start = Date.now();
         const name = `saves/${file}`;
         console.log(`Loading ${name}...`);
+        const path = resolve(TEXT_SAVES_FOLDER, file);
+        if (await importCurated(path, CuratedImport.saveRowsFrom,
+            (rows) => DatabaseInteractions.insertSave(db, rows))) {
+            console.log(`Finished loading ${name} in ${(Date.now() - start) / 1000}s.`);
+            continue;
+        }
+
         const p = convertToSQL(
-            resolve(TEXT_SAVES_FOLDER, file),
+            path,
             (batch) => DatabaseInteractions.insertSave(db,
                 batch.map(v =>
                 {

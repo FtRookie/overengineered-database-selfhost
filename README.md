@@ -14,6 +14,47 @@
 4. after you run the app, the files will get `".processed"` added in the end (remove ".processed" if you want to import them again)
 5. (optional) remove the text files if you don't need them anymore and you sure you got backups
 
+### Importing already-correct saves (.json / .jsonl)
+
+The `.txt` import above is for the 2019 dump, which is uniformly double-escaped and gets unslashed on the way
+in. That repair must not touch data which is already correct — and running it twice on a row you just fixed by
+hand breaks it again, because `\\\\` becomes `\\` becomes `\`.
+
+So correctness is declared by the extension rather than guessed at. Files ending `.json` or `.jsonl` are
+imported **with no repair, unescaping or transformation of any kind**. Both extensions behave identically:
+
+- **`.jsonl`** — one JSON object per line, no wrapping `[` or `{` around the file. Read a line at a time, so
+  use this for anything large.
+- **`.json`** — a single JSON object for the whole file. Parsed in one go, easier to hand-edit.
+
+Both are keyed by user id. Saves nest one level further, by slot index, so a player can hold several slots:
+
+```jsonc
+// players/players.json
+{
+  "238427763": { "seen1": true, "lastJoin": 1764494247 }
+}
+
+// saves/slots.json
+{
+  "238427763": {
+    "31": { "version": 38, "blocks": [ /* ... */ ] },
+    "34": { "version": 38, "blocks": [ /* ... */ ] }
+  }
+}
+```
+
+The same content as `.jsonl` is one object per line:
+
+```
+{"238427763":{"31":{"version":38,"blocks":[]}}}
+{"148819022":{"12":{"version":38,"blocks":[]}}}
+```
+
+Note that `data` here is a real nested object, not a string of escaped JSON — so there is no escaping to get
+wrong when editing an entry by hand. Files are renamed `.processed` after import, exactly like `.txt`. A line
+or file that fails to parse is skipped with a warning and the rest still import.
+
 ### To run:
 ```bash
 bun run index.ts
