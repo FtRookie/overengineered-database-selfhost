@@ -17,6 +17,12 @@ const [ADMIN_TOKEN, isUsingPlaceholderAdminToken] = await TokenHandler.getOrGene
 export { WRITE_TOKEN, isUsingPlaceholderWriteToken };
 export { ADMIN_TOKEN, isUsingPlaceholderAdminToken };
 
+// optional: only a deployment wired to the Discord bot has one, so no placeholder is generated (see BotApi)
+const botTokenFile = Bun.file("./Access Tokens/BOT_TOKEN");
+const BOT_TOKEN = (await botTokenFile.exists()) ? (await botTokenFile.text()).trim() || undefined : undefined;
+
+export { BOT_TOKEN };
+
 function destringifyData(entry: UnparsedCommonData | undefined): SavedPlayerFormat | undefined;
 function destringifyData(entry: UnparsedCommonDataWithIndex | undefined): ParsedSlotFormatWithIndex | undefined;
 function destringifyData(entry: (UnparsedCommonData | UnparsedCommonDataWithIndex) | undefined): any

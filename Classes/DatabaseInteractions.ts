@@ -95,6 +95,10 @@ export namespace DatabaseInteractions {
         `).get(playerID) as SavedPlayerDatabaseFormat | null ?? undefined;
     };
 
+    /** Every player row, unparsed and one at a time, so a full scan never holds the whole table. */
+    export const iterateRawPlayers = (db: Database) =>
+        db.query(`SELECT playerID, data FROM players`).iterate() as IterableIterator<SavedPlayerDatabaseFormat>;
+
 
     // SLOT DATA:
     //  INCREMENT \t INDEX \t USERID \t { "blocks": [ ... ], "version": ## }

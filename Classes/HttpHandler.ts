@@ -1,6 +1,7 @@
 import { Elysia, t } from 'elysia';
 import { Database } from "bun:sqlite";
-import { ADMIN_TOKEN, isUsingPlaceholderAdminToken, isUsingPlaceholderWriteToken, logMigration, WRITE_TOKEN } from '..';
+import { ADMIN_TOKEN, BOT_TOKEN, isUsingPlaceholderAdminToken, isUsingPlaceholderWriteToken, logMigration, WRITE_TOKEN } from '..';
+import { BotApi } from './BotApi';
 import { GameEventsHandler } from './GameEventsHandler';
 import { DatabaseInteractions, type SavedPlayerFormat, type ParsedSlotFormatWithIndex, type ParsedSlotFormat } from './DatabaseInteractions';
 
@@ -434,6 +435,8 @@ export namespace HttpHandler
                 token: t.String(),
             })
         });
+
+        BotApi.init(app, db, base, BOT_TOKEN);
 
         console.log(`HTTP is running on http://localhost:${port}`);
     }

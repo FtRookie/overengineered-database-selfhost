@@ -86,6 +86,20 @@ SaveData:
 | POST | /overengineered/save | Insert or update a save entry | { playerId: string, data: string, token: string } |
 | POST | /overengineered/migrate | Copy slots from one player to another | {fromID: string, toID: string}  |
 
+### Bot API (optional)
+
+Read-only endpoints for a Discord bot. **Off unless you create `Access Tokens/BOT_TOKEN`** containing a token of your
+own; no placeholder is generated, so a deployment without a bot is unaffected. Send it as
+`Authorization: Bearer <token>`.
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | /overengineered/bot/player/:id/blocks | One player's per-block limit overrides: `{ playerID, blocks }` |
+| GET | /overengineered/bot/grants | Every override in the table: `{ rowsScanned, rowsWithGrants, entries: [{ userId, key, value }], corrupt }`. A full scan, meant for audits |
+
+There are deliberately no write endpoints: this database mirrors the game's player rows, so a change made here
+would never reach the game and would be overwritten by the next mirror.
+
 ### example
 For dev environment, the <HOST_IP> will be http://localhost:1367
 
