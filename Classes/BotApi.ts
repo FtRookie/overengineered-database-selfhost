@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia, t } from 'elysia';
 import { Database } from "bun:sqlite";
 import { timingSafeEqual } from "node:crypto";
 import { LegacyJson } from "./LegacyJson";
@@ -11,16 +11,21 @@ export type GrantsOfRow =
     | { kind: "corrupt", reason: string };
 
 /**
- * Bot → Backend: a read-only API for the Discord bot, opt-in per deployment.
+ * Bot → Backend: an API for the Discord bot, opt-in per deployment.
  *
  * Mounted only when `Access Tokens/BOT_TOKEN` exists. Unlike the write and admin tokens no placeholder is
  * generated, so a self-host that never set up the bot integration exposes none of these routes and sees no
  * new warning.
  *
- * Read-only by design, and not just for now: the game's DataStore is authoritative and this database holds a
- * coalesced mirror of it. A write here would never reach a game server, and the next mirror would overwrite
- * it. Anything that must change player data still goes through the game.
+ * The one thing it writes is a player's per-block limits. The write lands in the stored row and is held as a
+ * pending change until the game pushes the row back carrying it (see {@link DatabaseInteractions.reconcilePush}).
  */
+// A Roblox user id, and a block id as the game spells them. The game's block list cannot be checked from here.
+const grantParams = t.Object({
+    id: t.String({ pattern: "^[0-9]{1,20}$" }),
+    blockId: t.String({ pattern: "^[A-Za-z0-9_]{1,64}$" }),
+});
+
 export namespace BotApi {
     /** Grant map of one stored player row. Only the top-level `blocks` map; `slots[].blocks` is a block count. */
     export const grantsOf = (userId: string, stored: unknown): GrantsOfRow => {
@@ -102,6 +107,35 @@ export namespace BotApi {
 
             return { rowsScanned, rowsWithGrants, entries, corrupt };
         });
+
+        const writeGrant = (id: string, blockId: string, limit: number | undefined, set: { status?: number | string }) => {
+            const result = DatabaseInteractions.setBlockLimit(db, id, blockId, limit);
+            if (!result.ok) {
+                set.status = 500;
+                return { error: result.reason, err_type: "INSERT_FAIL" };
+            }
+            return { playerID: id, blocks: result.blocks };
+        };
+
+        app.put(`/${base}/bot/player/:id/blocks/:blockId`, ({ params: { id, blockId }, body, headers, set }) => {
+            if (!isAuthorized(headers.authorization, token)) {
+                set.status = 401;
+                return unauthorized;
+            }
+            return writeGrant(id, blockId, body.limit, set);
+        }, {
+            params: grantParams,
+            body: t.Object({ limit: t.Integer({ minimum: 0, maximum: DatabaseInteractions.MAX_BLOCK_LIMIT }) }),
+        });
+
+        // absent rather than 0, so a revoked block leaves no key behind
+        app.delete(`/${base}/bot/player/:id/blocks/:blockId`, ({ params: { id, blockId }, headers, set }) => {
+            if (!isAuthorized(headers.authorization, token)) {
+                set.status = 401;
+                return unauthorized;
+            }
+            return writeGrant(id, blockId, undefined, set);
+        }, { params: grantParams });
 
         console.log("BOT_TOKEN: Token found, the bot API is enabled.");
     };

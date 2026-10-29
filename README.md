@@ -85,10 +85,17 @@ SaveData:
 | POST | /overengineered/player | Insert or update player entry | { slotIndex: number, playerId: string, data: string, token: string } |
 | POST | /overengineered/save | Insert or update a save entry | { playerId: string, data: string, token: string } |
 | POST | /overengineered/migrate | Copy slots from one player to another | {fromID: string, toID: string}  |
+| GET | /overengineered/player/:id/pending | Row keys changed here that the game has not pushed back yet | id (player ID) |
+| POST | /overengineered/player/blocks | Set one per-player block limit; an omitted limit removes it | { playerID: string, blockId: string, limit?: integer 0..5000, token: string } |
+
+A per-block limit set here (by the game's route above or the bot's) lands in the stored row and is also held in
+memory as a pending change. The game mirrors its whole player row, so each `POST /player` gets every pending
+change it does not already carry laid back on top; once a push carries the change, it is dropped. Pending
+changes do not survive a restart.
 
 ### Bot API (optional)
 
-Read-only endpoints for a Discord bot. **Off unless you create `Access Tokens/BOT_TOKEN`** containing a token of your
+Endpoints for a Discord bot. **Off unless you create `Access Tokens/BOT_TOKEN`** containing a token of your
 own; no placeholder is generated, so a deployment without a bot is unaffected. Send it as
 `Authorization: Bearer <token>`.
 
@@ -96,9 +103,10 @@ own; no placeholder is generated, so a deployment without a bot is unaffected. S
 | --- | --- | --- |
 | GET | /overengineered/bot/player/:id/blocks | One player's per-block limit overrides: `{ playerID, blocks }` |
 | GET | /overengineered/bot/grants | Every override in the table: `{ rowsScanned, rowsWithGrants, entries: [{ userId, key, value }], corrupt }`. A full scan, meant for audits |
+| PUT | /overengineered/bot/player/:id/blocks/:blockId | Set one limit. Body `{ limit: integer 0..5000 }` |
+| DELETE | /overengineered/bot/player/:id/blocks/:blockId | Remove one limit, leaving no key behind |
 
-There are deliberately no write endpoints: this database mirrors the game's player rows, so a change made here
-would never reach the game and would be overwritten by the next mirror.
+The writes are held as pending changes, the same as the game's `POST /player/blocks`.
 
 ### example
 For dev environment, the <HOST_IP> will be http://localhost:1367

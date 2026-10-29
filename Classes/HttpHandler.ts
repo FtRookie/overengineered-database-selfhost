@@ -286,13 +286,38 @@ export namespace HttpHandler
             if (isUsingPlaceholderWriteToken) return { error: "Using placeholder token", err_type: "INCORRECT_TOKEN" };
             if (body.token !== WRITE_TOKEN) return { error: "Incorrect token", err_type: "INCORRECT_TOKEN" };
             if (!Object.keys(body.data).length) return { error: "Incorrect body data type", err_type: "INSERT_FAIL" };
-            return DatabaseInteractions.insertPlayers(db, [body]) === "SUCCESS"
+            const row = DatabaseInteractions.reconcilePush({ playerID: body.playerID, data: body.data });
+            return DatabaseInteractions.insertPlayers(db, [row]) === "SUCCESS"
                 ? { status: 'ok' }
                 : { error: "Error while upserting player metadata", err_type: "INSERT_FAIL" };
         }, {
             body: t.Object({
                 playerID: t.String(),
                 data: t.Record(t.String(), t.Any()),
+                token: t.String(),
+            })
+        });
+
+        // changes made here that the game has not pushed back yet
+        app.get(`/${base}/player/:id/pending`, ({ params: { id } }) => DatabaseInteractions.getPendingChanges(id));
+
+        // one per-player block limit, set by a game server; an omitted limit removes it
+        app.post(`/${base}/player/blocks`, ({ body, set }) =>
+        {
+            if (isUsingPlaceholderWriteToken) return { error: "Using placeholder token", err_type: "INCORRECT_TOKEN" };
+            if (body.token !== WRITE_TOKEN) return { error: "Incorrect token", err_type: "INCORRECT_TOKEN" };
+
+            const result = DatabaseInteractions.setBlockLimit(db, body.playerID, body.blockId, body.limit);
+            if (!result.ok) {
+                set.status = 500;
+                return { error: result.reason, err_type: "INSERT_FAIL" };
+            }
+            return { blocks: result.blocks };
+        }, {
+            body: t.Object({
+                playerID: t.String({ pattern: "^[0-9]{1,20}$" }),
+                blockId: t.String({ pattern: "^[A-Za-z0-9_]{1,64}$" }),
+                limit: t.Optional(t.Integer({ minimum: 0, maximum: DatabaseInteractions.MAX_BLOCK_LIMIT })),
                 token: t.String(),
             })
         });
